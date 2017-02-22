@@ -1,0 +1,6 @@
+9456767d-d15b-41a3-a697-4e2aa8f36ad1  // control service
+7d99f31c-bc4f-4087-b0dc-f2ea2e7f0624  // ble caracteristic
+ee80b338-0bda-4b03-b54f-80cfc3d55117  // speed characteristic
+735e4d05-fb92-4e72-adb5-0202c5e4310d
+3882cf23-b2b6-4482-880e-feadcb5b176c
+0aeecd01-ea0b-4a91-9c8a-7c3acf43fd7d
