@@ -15,6 +15,8 @@
  *  test button 3 to toggle between reverse, low, and high speeds
  *  test button 4 = throttle when in ble full control mode
  *  
+ *  2/28/17 changed variable names
+ *  
  */
 #include <BLEAttribute.h>
 #include <BLECentral.h>
@@ -69,21 +71,22 @@ const int testButton3 = A4;
 const int testButton4 = A5;
 
 int blePower = 1;
-int test2State = 1;
-int test3State = 1;
-int test4State = 1;
+int throttleSelect = 1;
+int gearSelect = 1;
+int bleThrottle = 1;
 int blePowerPrevState = 1;
-int test2PrevState = 1;
-int test3PrevState = 1;
-int test4PrevState = 1;
+int throttleSelectPrevState = 1;
+int gearSelectPrevState = 1;
+int bleThrottlePrevState = 1;
 int bleState = 0;
 
 const int debounceDelay = 50;
 unsigned long debounceTime1 = 0; 
+unsigned long debounceTime2 = 0;
+unsigned long debounceTime3 = 0;
 int buttonState = 0;
 unsigned long forwardTimer = 0;
 unsigned long reverseTimer = 0;
-//unsigned long brakeTimer = 0;
 const long timer = 1000;
 long brakePoint = 2000;
 
@@ -146,24 +149,24 @@ void loop() {
   do{
     
     blePower = digitalRead(testButton1);
-    test2State = digitalRead(testButton2);
-    test3State = digitalRead(testButton3);
-    test4State = digitalRead(testButton4);
+    throttleSelect = digitalRead(testButton2);
+    gearSelect = digitalRead(testButton3);
+    bleThrottle = digitalRead(testButton4);
 
     if(blePower == 0 || bleCharacteristic.value() == 0){
       blePower = 0;
     }
 
-    if(test2State == 0 || speedCharacteristic.value() == 'R'){
-      test2State = 0;
+    if(throttleSelect == 0 || speedCharacteristic.value() == 'R'){
+      throttleSelect = 0;
     }
   
-    if(test3State == 0 || speedCharacteristic.value() == '1'){
-      test3State = 0;
+    if(gearSelect == 0 || speedCharacteristic.value() == '1'){
+      gearSelect = 0;
     }
   
-    if(test4State == 0 || speedCharacteristic.value() == '2'){
-      test4State = 0;
+    if(bleThrottle == 0 || speedCharacteristic.value() == '2'){
+      bleThrottle = 0;
     }
 
     // **************************turn BLE Control on and off********************************************
@@ -186,40 +189,40 @@ void loop() {
 
     //Test reverse
     if((millis()-forwardTimer) > timer){
-      if(test2State == 0 && test2PrevState == 1){
+      if(throttleSelect == 0 && throttleSelectPrevState == 1){
         motorRotation(0);
-        test2PrevState = 0;
-      }else if(test2State == 1 && test2PrevState == 0){
+        throttleSelectPrevState = 0;
+      }else if(throttleSelect == 1 && throttleSelectPrevState == 0){
         digitalWrite(rThrottle, OFF);
         reverseTimer = millis();
-        test2PrevState = 1;
+        throttleSelectPrevState = 1;
       }
     }
 
     //Test low speed
     if((millis()- reverseTimer) > timer){
-      if(test3State == 0 && test3PrevState == 1){
+      if(gearSelect == 0 && gearSelectPrevState == 1){
         motorRotation(1);
-        test3PrevState = 0;
-      }else if(test3State == 1 && test3PrevState == 0){
+        gearSelectPrevState = 0;
+      }else if(gearSelect == 1 && gearSelectPrevState == 0){
         digitalWrite(rThrottle, OFF);
         forwardTimer = millis();
-        test3PrevState = 1;
+        gearSelectPrevState = 1;
       }
     }
 
     //Test High speed 
     if((millis()- reverseTimer) > timer){
-      if(test4State == 0 && test4PrevState == 1){
+      if(bleThrottle == 0 && bleThrottlePrevState == 1){
         motorRotation(2);
-        test4PrevState = 0;
-      }else if(test4State == 1 && test4PrevState == 0){
+        bleThrottlePrevState = 0;
+      }else if(bleThrottle == 1 && bleThrottlePrevState == 0){
         digitalWrite(rThrottle, OFF);
         forwardTimer = millis();
-        test4PrevState = 1;
+        bleThrottlePrevState = 1;
       }
     }
-    if(test2State == 1 && test3State == 1 && test4State == 1){
+    if(throttleSelect == 1 && gearSelect == 1 && bleThrottle == 1){
       if((millis() - reverseTimer) > brakePoint && (millis() - forwardTimer) > brakePoint){
         digitalWrite(rBrake, OFF);
       }
