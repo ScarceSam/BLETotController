@@ -1,5 +1,5 @@
 /*  BLE controller for childs ride-on electric vehicle
- *   relay outputs match BLEcontroller_v1.fzz schematic 
+ *   relay outputs match BLEcontroller.fzz schematic 
  *   (save for; positive source needs to be added to code)
  *  
  *  notes
