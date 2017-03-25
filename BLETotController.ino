@@ -1,22 +1,14 @@
 /*  BLE controller for childs ride-on electric vehicle
  *   relay outputs match BLEcontroller.fzz schematic 
- *   (save for; positive source needs to be added to code)
  *  
- *  notes
- *  curently; 
- *  test button 1 turns on/off ble control
- *  test button 2 put vehicle in reverse and turns on throttle while pressed
- *  test button 3 put vehicle in low speed and turns on throttle while pressed
- *  test button 4 put vehicle in high speed and turns on throttle while pressed
- * 
- *  changes to be made;
- *  test button 1 to stay as is
- *  test button 2 to toggle between ble speed controll only (throttle controlled by child)
- *  test button 3 to toggle between reverse, low, and high speeds
- *  test button 4 = throttle when in ble full control mode
  *  
  *  2/28/17 changed variable names
- *  
+ *  3/3/17 changed both functions
+ *  3/4/17 added bleThrottle 
+ *  3/17/17 added dont allow shifting if throttle is on
+ *    and delays for shifting between forward and reverse gears
+ *  3/20/17 changed positve source relay usage
+ *  3/23/17 updated comments
  */
 #include <BLEAttribute.h>
 #include <BLECentral.h>
@@ -37,6 +29,7 @@ BLEPeripheral bleController;
 BLEService controlService("9456767d-d15b-41a3-a697-4e2aa8f36ad1"); 
 BLECharCharacteristic bleCharacteristic("7d99f31c-bc4f-4087-b0dc-f2ea2e7f0624", BLERead | BLEWrite);
 BLECharCharacteristic speedCharacteristic("ee80b338-0bda-4b03-b54f-80cfc3d55117", BLERead | BLEWrite);
+BLECharCharacteristic gearCharacteristic("735e4d05-fb92-4e72-adb5-0202c5e4310d", BLERead | BLEWrite);
 
 /* define what ouput LOW/HIGH sets the relays to OFF and ON
  *  using transistors to control the SainSmart Relay Module;
@@ -47,10 +40,11 @@ BLECharCharacteristic speedCharacteristic("ee80b338-0bda-4b03-b54f-80cfc3d55117"
 #define ON HIGH
 
 //set relays
-const int rPositive = 6; // Positive lead from battery
-const int rNegative = 1; // Negative lead to battery
-const int rThrottle = 5; // Throttle relay
-const int rBrake = 4;    // Brake Relay
+const int rSource = 7;    // source of positive power battery or throttle
+const int rPositive = 6;  // Positive cut-out
+const int rNegative = 11; // Negative lead to battery
+const int rThrottle = 5;  // Throttle relay
+const int rBrake = 4;     // Brake Relay
 
 // relays to cut motor leads over to BLE controller
 const int rRPCut = 3;    
@@ -65,37 +59,49 @@ const int rLP = 1;
 const int rLN = 13;
 
 // set test button inputs
-const int testButton1 = A2;
-const int testButton2 = A3;
-const int testButton3 = A4;
-const int testButton4 = A5;
+//const int testButton1 = A2;
+unsigned long debounceTime1 = 0;
+//const int testButton2 = A3;
+unsigned long debounceTime2 = 0;
+//const int testButton3 = A4;
+unsigned long debounceTime3 = 0;
+//const int testButton4 = A5;
+unsigned long debounceTime4 = 0;
 
 int blePower = 1;
-int throttleSelect = 1;
-int gearSelect = 1;
-int bleThrottle = 1;
 int blePowerPrevState = 1;
-int throttleSelectPrevState = 1;
-int gearSelectPrevState = 1;
-int bleThrottlePrevState = 1;
 int bleState = 0;
+int button1State = 0;
 
+int throttleSelect = 1;
+int throttleSelectPrevState = 1;
+int throttleState = 1;
+int button2State = 0;
+
+int gearSelect = 1;
+int gearSelectPrevState = 1;
+int gearSelectState = 0;
+int button3State = 0;
+int currentGear = 1;              //set set gear to LOW gear on startup
+
+int bleThrottle = 1;
+int bleThrottlePrevState = 1;
+int button4State = 0;
+
+int brakeState = 0;               //to let other functions/actions know when the brakes are engaged
 const int debounceDelay = 50;
-unsigned long debounceTime1 = 0; 
-unsigned long debounceTime2 = 0;
-unsigned long debounceTime3 = 0;
-int buttonState = 0;
-unsigned long forwardTimer = 0;
-unsigned long reverseTimer = 0;
-const long timer = 1000;
-long brakePoint = 2000;
+unsigned long throttleTimer = 0;  // used to set time from throttle-off to brake-engage
+const long timer = 500;
 
-void BLEMode (int A); //swiching BLE and Child control; 0=disabled 1=enabled
-void motorRotation (int B); //direction and speed of motor; 0=reverse, 1=lowspeed, 2=high speed
 
-void setup() {  
+void BLEMode (int A, int B);      //swiching BLE and Child control; 0=BLE disabled 1=BLE enabled
+void motorRotation (int C);       //direction and speed of motor; 0=reverse, 1=lowspeed, 2=high speed
+
+void setup(){  
   
   // Set all relays to outputs in the off state
+  pinMode(rSource, OUTPUT);
+  digitalWrite(rSource, OFF);
   pinMode(rPositive,OUTPUT);
   digitalWrite(rPositive,OFF);
   pinMode(rNegative,OUTPUT);
@@ -122,10 +128,10 @@ void setup() {
   digitalWrite(rLN,OFF);
 
   // set test button inputs
-  pinMode(testButton1, INPUT_PULLUP);
-  pinMode(testButton2, INPUT_PULLUP);
-  pinMode(testButton3, INPUT_PULLUP);
-  pinMode(testButton4, INPUT_PULLUP);
+  //pinMode(testButton1, INPUT_PULLUP);
+  //pinMode(testButton2, INPUT_PULLUP);
+  //pinMode(testButton3, INPUT_PULLUP);
+  //pinMode(testButton4, INPUT_PULLUP);
 
 
   bleController.setLocalName("Control");
@@ -134,6 +140,7 @@ void setup() {
   bleController.addAttribute(controlService);
   bleController.addAttribute(bleCharacteristic);
   bleController.addAttribute(speedCharacteristic);
+  bleController.addAttribute(gearCharacteristic);
 
   bleCharacteristic.setValue(0);
   speedCharacteristic.setValue(0);
@@ -141,157 +148,233 @@ void setup() {
   bleController.begin();
 }
 
-void loop() {
+void loop(){
   // attempt ble connection
   BLECentral controlDevice = bleController.central();
 
-  // do-while loop alows code to run whether ble connection is made or not
+  // do-while loop checks for ble connection
   do{
+
+    // **************************turn BLE Control on and off******************************************
     
-    blePower = digitalRead(testButton1);
-    throttleSelect = digitalRead(testButton2);
-    gearSelect = digitalRead(testButton3);
-    bleThrottle = digitalRead(testButton4);
-
-    if(blePower == 0 || bleCharacteristic.value() == 0){
+    if(/*digitalRead(testButton1) == 0 ||*/ bleCharacteristic.value() == 1){
       blePower = 0;
+    }else{
+      blePower = 1;
     }
-
-    if(throttleSelect == 0 || speedCharacteristic.value() == 'R'){
-      throttleSelect = 0;
-    }
-  
-    if(gearSelect == 0 || speedCharacteristic.value() == '1'){
-      gearSelect = 0;
-    }
-  
-    if(bleThrottle == 0 || speedCharacteristic.value() == '2'){
-      bleThrottle = 0;
-    }
-
-    // **************************turn BLE Control on and off********************************************
-    if (blePower != blePowerPrevState){
+    
+    if(blePower != blePowerPrevState){
       debounceTime1 = millis();
     }
 
-    if ((millis() - debounceTime1) > debounceDelay) {
-      if (blePower != buttonState) {
-        buttonState = blePower;
+    if((millis() - debounceTime1) > debounceDelay){
+      if(blePower != button1State){
+        button1State = blePower;
     
-        if (buttonState == LOW) {
+        if(button1State == LOW){
           bleState = !bleState;
-          BLEMode(bleState);
+          BLEMode(bleState, throttleState);
         }
       }
     }
     blePowerPrevState = blePower;
+    
     // ***********************************************************************************************
 
-    //Test reverse
-    if((millis()-forwardTimer) > timer){
-      if(throttleSelect == 0 && throttleSelectPrevState == 1){
-        motorRotation(0);
-        throttleSelectPrevState = 0;
-      }else if(throttleSelect == 1 && throttleSelectPrevState == 0){
-        digitalWrite(rThrottle, OFF);
-        reverseTimer = millis();
-        throttleSelectPrevState = 1;
-      }
+    //***************Throttle select: swaps power between in-car controls and BLE controls ***********
+    
+    if(/*digitalRead(testButton2) == 0 ||*/ speedCharacteristic.value() == 1){
+      throttleSelect = 0;
+    }else{
+      throttleSelect = 1;
+    }
+    
+    if(throttleSelect != throttleSelectPrevState){
+      debounceTime2 = millis();
     }
 
-    //Test low speed
-    if((millis()- reverseTimer) > timer){
-      if(gearSelect == 0 && gearSelectPrevState == 1){
-        motorRotation(1);
-        gearSelectPrevState = 0;
-      }else if(gearSelect == 1 && gearSelectPrevState == 0){
-        digitalWrite(rThrottle, OFF);
-        forwardTimer = millis();
-        gearSelectPrevState = 1;
+    if((millis() - debounceTime2) > debounceDelay){
+      if(throttleSelect != button2State){
+        button2State = throttleSelect;
+    
+        if(button2State == LOW && brakeState == 0){  //checking brake state makes sure car is stoped before switching control over
+          throttleState = !throttleState;
+          BLEMode(bleState, throttleState);
+        }
       }
+    }
+    throttleSelectPrevState = throttleSelect;
+    
+    //************************************************************************************************
+    
+    // ***************************Gear select: changes gears(duh)*************************************
+
+    //int analogReadOf3 = analogRead(testButton3);          //test button 3 is not functional 
+
+    if((/*analogReadOf3 <= 256 ||*/ gearCharacteristic.value() == 1) && bleThrottle == 1){
+      gearSelect = 0;
+    }else if((/*(analogReadOf3 > 256 && analogReadOf3 < 768) ||*/ gearCharacteristic.value() == 'R') && bleThrottle == 1){
+      gearSelect = 'R';
+    }else{
+      gearSelect = 1;
     }
 
-    //Test High speed 
-    if((millis()- reverseTimer) > timer){
-      if(bleThrottle == 0 && bleThrottlePrevState == 1){
-        motorRotation(2);
-        bleThrottlePrevState = 0;
-      }else if(bleThrottle == 1 && bleThrottlePrevState == 0){
-        digitalWrite(rThrottle, OFF);
-        forwardTimer = millis();
-        bleThrottlePrevState = 1;
+    if(gearSelect != gearSelectPrevState){
+      debounceTime3 = millis();
+    }
+
+    if((millis() - debounceTime3) > debounceDelay){
+      if(gearSelect != button3State){
+        button3State = gearSelect;
+
+        if(button3State == 'R' && currentGear != 0 && brakeState == 0){
+          currentGear = 0;
+          motorRotation(currentGear);
+        }else if(button3State == 0 && currentGear != 1 && bleThrottle == 1){
+          currentGear = 1;
+          motorRotation(currentGear);
+        }else if(button3State == 0 && currentGear == 1 && bleThrottle == 1){
+          currentGear = 2;
+          motorRotation(currentGear);
+        }
       }
     }
-    if(throttleSelect == 1 && gearSelect == 1 && bleThrottle == 1){
-      if((millis() - reverseTimer) > brakePoint && (millis() - forwardTimer) > brakePoint){
+    gearSelectPrevState = gearSelect;
+    
+    // ***********************************************************************************************
+    
+    // ***************************Throttle************************************************************
+  
+    if((/*digitalRead(testButton4) == 0 || */speedCharacteristic.value() == 'G') && throttleState == 1){
+      bleThrottle = 0;
+    }else{
+      bleThrottle = 1;
+    }
+
+    if(bleThrottle != bleThrottlePrevState){
+      debounceTime4 = millis();
+    }
+
+    if((millis() - debounceTime4) > debounceDelay){
+      if(bleThrottle != button4State){
+        button4State = bleThrottle;
+        if(button4State == LOW){
+          digitalWrite(rBrake, ON);
+          brakeState = 1;
+          digitalWrite(rThrottle, ON);
+        }
+
+        if(bleThrottle == HIGH){
+          digitalWrite(rThrottle, OFF);
+          throttleTimer = millis();
+          brakeState = 2;
+        }
+      }
+    }
+    bleThrottlePrevState = bleThrottle;
+
+    // ***********************************************************************************************
+
+    if(throttleSelect == 1 && gearSelect == 1 && bleThrottle == 1 && throttleState == 1 && brakeState == 2){
+      if((millis() - throttleTimer) > timer){
         digitalWrite(rBrake, OFF);
+        brakeState = 0;
       }
     }
-  }while (controlDevice.connected());
-}
+  }while(controlDevice.connected());
 
-void BLEMode(int A) {
+}//end main loop
 
-  if (A < 0 || A > 1){
-    return; 
-  }
+
+void BLEMode(int A, int B){
 
   /* Turn on/off BLE control of the vehicle by;
   *  Turning control relays to normal state (to prvent shorts or unwanted startup) 
   *  then turning on/off the Positive, negative, and motor cutout relays
   */
+  //digitalWrite(rSource, OFF);
   digitalWrite(rThrottle, OFF);
   digitalWrite(rBrake, OFF);
-  digitalWrite(rRP, OFF);
-  digitalWrite(rRN, OFF);
-  digitalWrite(rLP, OFF);
-  digitalWrite(rLN, OFF);
+  //digitalWrite(rRP, OFF);
+  //digitalWrite(rRN, OFF);
+  //digitalWrite(rLP, OFF);
+  //digitalWrite(rLN, OFF);
 
-  if (A == 1){
-    digitalWrite(rPositive, ON);
-    digitalWrite(rNegative, ON);
-    digitalWrite(rRPCut, ON);
-    digitalWrite(rRNCut, ON);
-    digitalWrite(rLPCut, ON);
-    digitalWrite(rLNCut, ON);
-  }else if (A == 0){
+  // if turning BLE off
+  if(A == 0){
+    digitalWrite(rRP, OFF);
+    digitalWrite(rRN, OFF);
+    digitalWrite(rLP, OFF);
+    digitalWrite(rLN, OFF);
+    digitalWrite(rSource, OFF);
     digitalWrite(rPositive, OFF);
     digitalWrite(rNegative, OFF);
     digitalWrite(rRPCut, OFF);
     digitalWrite(rRNCut, OFF);
     digitalWrite(rLPCut, OFF);
     digitalWrite(rLNCut, OFF);
-  }
-  return;
-}
-
-void motorRotation (int B){
-
-  if (B < 0 || B > 2){
-    return;
-  }
-
-  digitalWrite(rThrottle, OFF);
-
-  if (B == 0){
-    digitalWrite(rRP, ON);
-    digitalWrite(rRN, OFF);
-    digitalWrite(rLP, OFF);
-    digitalWrite(rLN, ON);
-  }else if (B == 1){
+    
+  // if turning BLE on (A) without BLE throttle control (B) 
+  }else if(A == 1 && B == 0){
+    digitalWrite(rSource, OFF);
+    digitalWrite(rPositive, ON);
+    digitalWrite(rNegative, ON);
+    digitalWrite(rRPCut, ON);
+    digitalWrite(rRNCut, ON);
+    digitalWrite(rLPCut, ON);
+    digitalWrite(rLNCut, ON);
+    digitalWrite(rThrottle, ON);
+    digitalWrite(rBrake, ON);
+    
+  // if turning BLE on (A) with BLE throttle control (B) 
+  }else if(A == 1 && B == 1){
+    digitalWrite(rSource, ON);
     digitalWrite(rRP, OFF);
     digitalWrite(rRN, OFF);
     digitalWrite(rLP, OFF);
     digitalWrite(rLN, OFF);
-  }else if (B == 2){
+    digitalWrite(rPositive, ON);
+    digitalWrite(rNegative, ON);
+    digitalWrite(rRPCut, ON);
+    digitalWrite(rRNCut, ON);
+    digitalWrite(rLPCut, ON);
+    digitalWrite(rLNCut, ON);
+  }
+  return;
+}
+
+void motorRotation (int C){
+
+  if(throttleState == 0){
+    BLEMode(1, 1);
+    delay(timer);
+  }
+  
+  // Reverse
+  if(C == 0){
+    digitalWrite(rRP, ON);
+    digitalWrite(rRN, OFF);
+    digitalWrite(rLP, OFF);
+    digitalWrite(rLN, ON);
+  
+  // Low speed
+  }else if(C == 1){
+    digitalWrite(rRP, OFF);
+    digitalWrite(rRN, OFF);
+    digitalWrite(rLP, OFF);
+    digitalWrite(rLN, OFF);
+
+  // High speed
+  }else if(C == 2){
     digitalWrite(rRP, OFF);
     digitalWrite(rRN, ON);
     digitalWrite(rLP, ON);
     digitalWrite(rLN, OFF);
   }
-
-  digitalWrite(rThrottle, ON);
-  digitalWrite(rBrake, ON);
+  
+  if(throttleState == 0){
+    BLEMode(1, 0);
+  }
 
   return;
 }
